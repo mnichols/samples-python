@@ -1,3 +1,4 @@
+import asyncio
 import time
 from dataclasses import dataclass
 
@@ -31,4 +32,4 @@ async def compose_greeting(input: ComposeGreetingInput) -> str:
             # activity was either cancelled or workflow was completed or worker shut down
             raise exception
 
-        time.sleep(1)
+        await asyncio.sleep(1)
