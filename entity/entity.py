@@ -1,68 +1,25 @@
 import asyncio
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import Enum
 
-from temporalio import workflow
+from temporalio import workflow, activity
 from temporalio.client import Client
+from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 from temporalio.workflow import ParentClosePolicy
 
-
-@dataclass
-class OnboardEmployeeRequest:
-    id: str
-    first_name: str
-    last_name: str
-    default_location: str
-    default_timezone: str
-
-
-@dataclass
-class EmployeeDetailsResponse:
-    id: str
-    first_name: str
-    last_name: str
-    default_location: str
-    default_timezone: str
-    locations_id: str
-    notifications_id: str
-
-
-@dataclass
-class StartLocationServicesRequest:
-    employee_id: str
-    location: str
-    timezone: str
-
-
-@dataclass
-class SetCurrentLocationRequest:
-    location: str
-    timezone: str
-
-
-@dataclass
-class EmployeeLocationDetails:
-    employee_id: str
-    location: str
-    timezone: str
-    location_id: str
-
-
-NotificationFrequency = Enum('NotificationFrequency', ['NEVER', 'DAILY', 'WEEKLY', 'MONTHLY'])
-
-
-@dataclass
-class StartEmployeeNotifications:
-    employee_id: str
-    frequency: str
+from entity.messages import EmployeeLocationDetailsResponse, SetCurrentLocationRequest, StartLocationServicesRequest, \
+    EmployeeNotificationsResponse, RescheduleNotificationsRequest, StartEmployeeNotificationsRequest, \
+    EmployeeDetailsResponse, OnboardEmployeeRequest
+from entity.notifications import NotificationHandlers
 
 
 @workflow.defn
 class EmployeeLocations:
     def __init__(self) -> None:
-        self.state: EmployeeLocationDetails = EmployeeLocationDetails(
+        self.state: EmployeeLocationDetailsResponse = EmployeeLocationDetailsResponse(
             employee_id='',
             location='',
             timezone='',
@@ -70,7 +27,7 @@ class EmployeeLocations:
 
     @workflow.signal
     async def set_current_location(self, params: SetCurrentLocationRequest):
-        self.state = EmployeeLocationDetails(
+        self.state = EmployeeLocationDetailsResponse(
             self.state.employee_id,
             params.location,
             params.timezone,
@@ -78,24 +35,53 @@ class EmployeeLocations:
 
     @workflow.run
     async def execute(self, params: StartLocationServicesRequest):
-        self.state = EmployeeLocationDetails(
+        self.state = EmployeeLocationDetailsResponse(
             self.state.employee_id,
             params.location,
             params.timezone,
             workflow.info().workflow_id)
         await workflow.wait_condition(lambda: False)
+        # periodically sync this location / tz with downstream services here.
+        # this could take similar approach to the EmployeeNotifications service with a periodic task to perform
+
 
 
 @workflow.defn
 class EmployeeNotifications:
     def __init__(self) -> None:
-        pass
+        self.state: EmployeeNotificationsResponse = EmployeeNotificationsResponse(
+            employee_id='',
+            frequency='',
+            paused=False,
+            next_digest_send_n_seconds=0
+        )
+
+    @workflow.signal
+    async def reschedule_notifications(self, params: RescheduleNotificationsRequest):
+        self.state = EmployeeNotificationsResponse(self.state.employee_id,
+                                                   frequency=params.frequency,
+                                                   paused=params.paused,
+                                                   next_digest_send_n_seconds= self.state.next_digest_send_n_seconds)
 
     @workflow.run
-    async def donkey(self, params: StartEmployeeNotifications):
-        dog = params.employee_id
-        await workflow.wait_condition(lambda: False)
+    async def execute(self, params: StartEmployeeNotificationsRequest):
+        secs = await workflow.execute_local_activity_method(NotificationHandlers.calculate_next_digest_send_n_seconds,
+                                                            params.frequency,
+                                                            start_to_close_timeout=timedelta(seconds=3))
+        self.state = EmployeeNotificationsResponse(
+            params.employee_id,
+            params.frequency,
+            params.paused,
+            next_digest_send_n_seconds=secs)
 
+        await workflow.wait_condition(lambda: not self.state.paused, timeout=self.state.next_digest_send_n_seconds)
+        if self.state.paused:
+            return workflow.continue_as_new(
+                StartEmployeeNotificationsRequest(params.employee_id, frequency=self.state.frequency, paused=True))
+        await workflow.execute_activity(NotificationHandlers.send_digest, self.state.employee_id, start_to_close_timeout=timedelta(seconds=120))
+        # error handling skipped for brevity
+        return workflow.continue_as_new(
+            StartEmployeeNotificationsRequest(params.employee_id, frequency=self.state.frequency, paused=self.state.paused))
 
 @workflow.defn
 class Employee:
@@ -128,8 +114,8 @@ class Employee:
                                              )
 
         notifications = asyncio.create_task(workflow.execute_child_workflow(
-            EmployeeNotifications.donkey,
-            StartEmployeeNotifications(params.id, 'DAILY'),
+            EmployeeNotifications.execute,
+            StartEmployeeNotificationsRequest(params.id, 'DAILY'),
             id=self.state.notifications_id,
             parent_close_policy=ParentClosePolicy.REQUEST_CANCEL,
         ))
