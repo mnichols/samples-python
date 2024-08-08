@@ -17,6 +17,7 @@ class OnboardEmployeeRequest:
     default_location: str
     default_timezone: str
 
+
 @dataclass
 class EmployeeDetailsResponse:
     id: str
@@ -27,16 +28,19 @@ class EmployeeDetailsResponse:
     locations_id: str
     notifications_id: str
 
+
 @dataclass
 class StartLocationServicesRequest:
     employee_id: str
     location: str
     timezone: str
 
+
 @dataclass
 class SetCurrentLocationRequest:
     location: str
     timezone: str
+
 
 @dataclass
 class EmployeeLocationDetails:
@@ -45,16 +49,14 @@ class EmployeeLocationDetails:
     timezone: str
     location_id: str
 
-class NotificationFrequency(Enum):
-    NEVER = 0
-    DAILY = 1
-    MONDAY = 2
-    FRIDAY = 3
+
+NotificationFrequency = Enum('NotificationFrequency', ['NEVER', 'DAILY', 'WEEKLY', 'MONTHLY'])
+
 
 @dataclass
 class StartEmployeeNotifications:
     employee_id: str
-    frequency: NotificationFrequency
+    frequency: str
 
 
 @workflow.defn
@@ -72,7 +74,7 @@ class EmployeeLocations:
             self.state.employee_id,
             params.location,
             params.timezone,
-            workflow.info().workflow_id )
+            workflow.info().workflow_id)
 
     @workflow.run
     async def execute(self, params: StartLocationServicesRequest):
@@ -81,28 +83,30 @@ class EmployeeLocations:
             params.location,
             params.timezone,
             workflow.info().workflow_id)
-        await workflow.wait_condition(lambda : False)
+        await workflow.wait_condition(lambda: False)
 
 
 @workflow.defn
 class EmployeeNotifications:
     def __init__(self) -> None:
         pass
-    
+
     @workflow.run
-    async def execute(self, params: StartEmployeeNotifications):
-        await workflow.wait_condition(lambda : False)
+    async def donkey(self, params: StartEmployeeNotifications):
+        dog = params.employee_id
+        await workflow.wait_condition(lambda: False)
+
 
 @workflow.defn
 class Employee:
     def __init__(self) -> None:
-        self.offboarded : bool = False
-        self.state : EmployeeDetailsResponse = EmployeeDetailsResponse(id='',
-                                                                       first_name='',
-                                                                       last_name='', default_location='',
-                                                                       default_timezone='',
-                                                                       locations_id='',
-                                                                       notifications_id='')
+        self.offboarded: bool = False
+        self.state: EmployeeDetailsResponse = EmployeeDetailsResponse(id='',
+                                                                      first_name='',
+                                                                      last_name='', default_location='',
+                                                                      default_timezone='',
+                                                                      locations_id='',
+                                                                      notifications_id='')
 
     @workflow.query
     async def get_employee_details(self) -> EmployeeDetailsResponse:
@@ -123,23 +127,23 @@ class Employee:
                                              f"notifications_{params.id}"
                                              )
 
+        notifications = asyncio.create_task(workflow.execute_child_workflow(
+            EmployeeNotifications.donkey,
+            StartEmployeeNotifications(params.id, 'DAILY'),
+            id=self.state.notifications_id,
+            parent_close_policy=ParentClosePolicy.REQUEST_CANCEL,
+        ))
+
         locations = asyncio.create_task(workflow.execute_child_workflow(
             EmployeeLocations.execute,
             args=[StartLocationServicesRequest(params.id, params.default_location, params.default_timezone)],
             id=self.state.locations_id,
             parent_close_policy=ParentClosePolicy.REQUEST_CANCEL,
         ))
-        notifications = asyncio.create_task(workflow.execute_child_workflow(
-            EmployeeNotifications.execute,
-            args=[StartEmployeeNotifications(params.id, NotificationFrequency.DAILY)],
-            id=self.state.notifications_id,
-        ))
 
         await workflow.wait_condition(lambda: self.offboarded)
         await locations
         await notifications
-
-
 
 
 async def main():
@@ -148,9 +152,9 @@ async def main():
 
     # Run a worker for the workflow
     async with Worker(
-        client,
-        task_queue="app",
-        workflows=[Employee, EmployeeNotifications, EmployeeLocations],
+            client,
+            task_queue="app",
+            workflows=[Employee, EmployeeNotifications, EmployeeLocations],
     ):
         ee_id = f"ee_{str(uuid.uuid4())}"
         # While the worker is running, use the client to run the workflow and
