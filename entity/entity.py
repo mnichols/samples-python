@@ -68,8 +68,7 @@ class EmployeeNotifications:
                                                    paused=params.paused,
                                                    next_digest_send_n_seconds= self.state.next_digest_send_n_seconds)
         self.schedule_change = params
-    def unblock(self):
-        return self.state.schedule_change is None
+
     @workflow.run
     async def execute(self, params: StartEmployeeNotificationsRequest) -> None:
         self.schedule_change = None
@@ -89,12 +88,13 @@ class EmployeeNotifications:
         # inspect after-the-fact
         await workflow.wait_condition(lambda: self.schedule_change is not None, timeout=timedelta(seconds=self.state.next_digest_send_n_seconds))
 
-        if self.state.paused:
-            workflow.logger.info("pausing notifications")
-            workflow.continue_as_new(
-                StartEmployeeNotificationsRequest(params.employee_id,
-                                                  frequency=self.state.frequency,
-                                                  paused=True))
+        if self.schedule_change is not None:
+            workflow.logger.info("schedule was changed. continuing as new")
+            workflow.continue_as_new(StartEmployeeNotificationsRequest(
+                employee_id=params.employee_id,
+                frequency=self.state.frequency,
+                paused = self.state.paused
+            ))
         else:
             workflow.logger.info("sending digest notification")
             await workflow.execute_activity(NotificationHandlers.send_digest,
