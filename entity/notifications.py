@@ -1,7 +1,7 @@
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from entity.messages import SendDigestRequest
+from messages import SendDigestRequest
 
 
 class NotificationHandlers:

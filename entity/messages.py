@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 
 
 @dataclass
@@ -9,6 +10,10 @@ class OnboardEmployeeRequest:
     default_location: str
     default_timezone: str
 
+@dataclass
+class UpdateEmployeeDetailsRequest:
+    first_name: str
+    last_name: str
 
 @dataclass
 class EmployeeDetailsResponse:
@@ -54,7 +59,7 @@ class StartEmployeeNotificationsRequest:
 @dataclass
 class RescheduleNotificationsRequest:
     frequency: str
-    paused: bool
+    paused: bool = False
 
 @dataclass
 class EmployeeNotificationsResponse:
